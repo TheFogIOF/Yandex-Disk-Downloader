@@ -1,16 +1,207 @@
 <!DOCTYPE html>
-<script>
-    fetch(`https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encodeURIComponent(new URLSearchParams(location.search).get('download'))}`)
-        .then(r => r.json())
-        .then(data => {
-            if (data.href) {
-                const a = document.createElement('a');
-                a.href = data.href;
-                a.download = '';
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => window.close(), 1000);
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="no-referrer">
+    <script>
+        async function downloadFromGitHub() {
+            try {
+                const params = new URLSearchParams(location.search);
+                const yandexLink = params.get('download');
+                
+                if (!yandexLink) {
+                    showError('Нет ссылки в параметрах');
+                    return;
+                }
+                
+                showStatus('Шаг 1: Получаю ссылку от Яндекс.Диска...');
+                
+                // Вариант 1: Через CORS-прокси (обходит ограничения GitHub)
+                const proxyUrl = 'https://corsproxy.io/?';
+                const encoded = encodeURIComponent(
+                    `https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encodeURIComponent(yandexLink)}`
+                );
+                
+                const response = await fetch(proxyUrl + encoded);
+                
+                if (!response.ok) {
+                    // Вариант 2: Прямой запрос (может не работать из-за CORS)
+                    throw new Error('Прокси не сработал, пробую прямой запрос...');
+                }
+                
+                const data = await response.json();
+                
+                if (data.href) {
+                    showStatus('Шаг 2: Начинаю скачивание файла...');
+                    
+                    // Ключевое отличие от локальной версии:
+                    // Нужно открыть ссылку в той же вкладке, а не создавать новую
+                    await startDownload(data.href);
+                    
+                } else {
+                    throw new Error('Яндекс не вернул ссылку');
+                }
+                
+            } catch (error) {
+                if (error.message.includes('прямой запрос')) {
+                    // Пробуем прямой запрос без прокси
+                    await tryDirectRequest();
+                } else {
+                    showError(error.message);
+                }
             }
-        })
-        .catch(() => window.close());
-</script>
+        }
+        
+        async function tryDirectRequest() {
+            try {
+                const params = new URLSearchParams(location.search);
+                const yandexLink = params.get('download');
+                const encoded = encodeURIComponent(yandexLink);
+                
+                // Прямой запрос с настройками CORS
+                const response = await fetch(
+                    `https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=${encoded}`,
+                    {
+                        mode: 'cors',
+                        credentials: 'omit' // Не отправляем куки
+                    }
+                );
+                
+                const data = await response.json();
+                
+                if (data.href) {
+                    // Используем трюк с iframe для скачивания
+                    downloadViaIframe(data.href);
+                }
+                
+            } catch (e) {
+                showError('Не удалось получить файл через GitHub');
+            }
+        }
+        
+        function downloadViaIframe(downloadUrl) {
+            // Создаем скрытый iframe для скачивания
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = downloadUrl;
+            
+            // Добавляем специальные атрибуты для скачивания
+            iframe.sandbox = 'allow-scripts allow-same-origin allow-downloads';
+            
+            document.body.appendChild(iframe);
+            
+            showStatus('Файл скачивается через iframe...');
+            
+            // Пытаемся закрыть окно через 3 секунды
+            setTimeout(() => {
+                try {
+                    if (window.opener) {
+                        window.close();
+                    }
+                } catch(e) {
+                    showStatus('Скачивание начато. Можно закрыть эту вкладку.');
+                }
+            }, 3000);
+        }
+        
+        async function startDownload(url) {
+            // Создаем скрытую форму для отправки запроса
+            const form = document.createElement('form');
+            form.method = 'GET';
+            form.action = url;
+            form.target = '_blank'; // Открываем в новой вкладке
+            form.style.display = 'none';
+            
+            // Добавляем необходимые поля
+            const disposition = document.createElement('input');
+            disposition.type = 'hidden';
+            disposition.name = 'disposition';
+            disposition.value = 'attachment';
+            form.appendChild(disposition);
+            
+            document.body.appendChild(form);
+            form.submit();
+            
+            // Удаляем форму и пытаемся закрыть окно
+            setTimeout(() => {
+                document.body.removeChild(form);
+                tryCloseWindow();
+            }, 1000);
+        }
+        
+        function showStatus(text) {
+            document.getElementById('status').textContent = text;
+            console.log('[GitHub Downloader]', text);
+        }
+        
+        function showError(message) {
+            const status = document.getElementById('status');
+            status.innerHTML = `<span style="color:red">${message}</span><br>
+                              <button onclick="location.reload()">Повторить</button>
+                              <button onclick="window.close()">Закрыть</button>`;
+        }
+        
+        function tryCloseWindow() {
+            try {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else if (window.opener) {
+                    window.close();
+                } else {
+                    showStatus('Скачивание завершено. Закройте вкладку.');
+                }
+            } catch(e) {
+                showStatus('Скачивание начато. Можно закрыть эту вкладку.');
+            }
+        }
+        
+        // Запускаем при загрузке
+        window.addEventListener('DOMContentLoaded', downloadFromGitHub);
+    </script>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+        }
+        #status {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Скачивание с Яндекс.Диска</h2>
+        <div id="status">Инициализация...</div>
+        <p style="color:#666;font-size:14px;margin-top:20px;">
+            Через GitHub Pages | Версия 2.0
+        </p>
+    </div>
+</body>
+</html>
